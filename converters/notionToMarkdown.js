@@ -6,11 +6,15 @@
  * - Renders toggle as bold list item + indented children
  * - Renders callout as quoted block with emoji (uses icon.emoji if present)
  * - Renders child_page / link_to_page with title + page_id
+ * - Renders media blocks (image, video, audio, file, bookmark) as Markdown links/images
  * - Unsupported / exotic blocks → full unmodified raw block object in unsupportedMarkdownBlocks
  * - No HTML comments inside markdown output
  * - Uses JSON.parse(JSON.stringify()) for deep copy (compatible with older environments)
+ *
+ * @param {Array}  blocks - Notion API blocks array
+ * @param {Object} config - Optional configuration object for future feature flags
  */
-function notionToMarkdown(blocks) {
+function notionToMarkdown(blocks, config = {}) {
     if (!Array.isArray(blocks)) {
         return {
             markdownContent: "",
@@ -98,6 +102,77 @@ function notionToMarkdown(blocks) {
                     line = `\`\`\`${lang}\n${text}\n\`\`\`\n\n`;
                     break;
 
+                // ── Media blocks ─────────────────────────────────────────────────────
+                case "image": {
+                    const imgCaption = parseRichText(data.caption || []) || "image";
+                    const imgUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    if (imgUrl) {
+                        line = `![${imgCaption}](${imgUrl})\n\n`;
+                    }
+                    break;
+                }
+
+                case "video": {
+                    const vidCaption = parseRichText(data.caption || []);
+                    const vidUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    if (vidUrl) {
+                        line = `[▶ Video](${vidUrl})\n\n`;
+                        if (vidCaption) line = `[▶ ${vidCaption}](${vidUrl})\n\n`;
+                    }
+                    break;
+                }
+
+                case "audio": {
+                    const audCaption = parseRichText(data.caption || []);
+                    const audUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    if (audUrl) {
+                        line = `[🔊 Audio](${audUrl})\n\n`;
+                        if (audCaption) line = `[🔊 ${audCaption}](${audUrl})\n\n`;
+                    }
+                    break;
+                }
+
+                case "file": {
+                    const fileUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    const fileName = data.name || fileUrl.split("/").pop() || "file";
+                    if (fileUrl) {
+                        line = `[📎 ${fileName}](${fileUrl})\n\n`;
+                    }
+                    break;
+                }
+
+                case "bookmark": {
+                    const bmCaption = parseRichText(data.caption || []);
+                    const bmUrl = data.url || "";
+                    if (bmUrl) {
+                        line = bmCaption
+                            ? `[🔗 ${bmCaption}](${bmUrl})\n\n`
+                            : `[🔗 ${bmUrl}](${bmUrl})\n\n`;
+                    }
+                    break;
+                }
+
+                case "pdf": {
+                    const pdfUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    const pdfCaption = parseRichText(data.caption || []);
+                    const pdfName = pdfCaption || pdfUrl.split("/").pop() || "PDF";
+                    if (pdfUrl) {
+                        line = `[📄 ${pdfName}](${pdfUrl})\n\n`;
+                    }
+                    break;
+                }
+
+                case "embed": {
+                    const embedUrl = data.url || "";
+                    const embedCaption = parseRichText(data.caption || []);
+                    if (embedUrl) {
+                        line = embedCaption
+                            ? `[🌐 ${embedCaption}](${embedUrl})\n\n`
+                            : `[🌐 ${embedUrl}](${embedUrl})\n\n`;
+                    }
+                    break;
+                }
+
                 case "divider":
                     line = `${indent}---\n\n`;
                     numberCounter = 1;
@@ -128,12 +203,6 @@ function notionToMarkdown(blocks) {
 
                 // ── Not rendered → store full unmodified raw block via JSON copy ──────
                 case "table":
-                case "image":
-                case "video":
-                case "pdf":
-                case "file":
-                case "embed":
-                case "bookmark":
                 case "equation":
                 case "synced_block":
                 case "template":

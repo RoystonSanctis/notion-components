@@ -56,12 +56,19 @@ Converts a Notion API block array into a Markdown string.
 | numbered_list_item | `1. Item` |
 | to_do | `- [x] Task` |
 | quote | `> Quote` |
-| code | Markdown code block |
+| code | Fenced code block with language |
 | divider | `---` |
 | toggle | Bold list item with nested content |
 | callout | Quoted block with emoji |
 | child_page | Page reference |
 | link_to_page | Linked page reference |
+| image | `![caption](url)` |
+| video | `[▶ Video](url)` |
+| audio | `[🔊 Audio](url)` |
+| file | `[📎 filename](url)` |
+| bookmark | `[🔗 url](url)` |
+| pdf | `[📄 filename](url)` |
+| embed | `[🌐 url](url)` |
 
 Unsupported blocks are stored separately for further processing.
 
@@ -72,7 +79,8 @@ Unsupported blocks are stored separately for further processing.
 ```javascript
 import notionToMarkdown from "./notionToMarkdown.js"
 
-const result = notionToMarkdown(notionBlocks)
+const config = {}; // Optional configuration object for future features
+const result = notionToMarkdown(notionBlocks, config)
 
 console.log(result.markdownContent)
 console.log(result.unsupportedMarkdownBlocks)
@@ -89,7 +97,7 @@ console.log(result.unsupportedMarkdownBlocks)
 
 ## Function Overview
 
-### notionToMarkdown(blocks)
+### notionToMarkdown(blocks, config)
 
 Converts a Notion block array into Markdown.
 
@@ -97,6 +105,8 @@ Converts a Notion block array into Markdown.
 
 - **blocks**: `Array`
   The array of blocks returned from the Notion API.
+- **config**: `Object` *(optional)*
+  Configuration object for future feature flags. Defaults to `{}`.
 
 #### Returns
 
@@ -121,7 +131,6 @@ Upcoming utilities:
 - Markdown → Notion block converter
 - Notion rich text utilities
 - Table conversion helpers
-- Image and media block handling
 - Notion page export tools
 
 ## Use Cases
@@ -157,8 +166,8 @@ If you want to improve support for additional Notion block types or add new conv
 
 ## License
 
-MIT License
+[MIT License](https://github.com/RoystonSanctis/notion-components/blob/main/LICENSE)
 
 ## Maintained By
 
-Built and maintained for viaSocket Automation.
+Built and maintained for viaSocket Automation by [Royston](https://github.com/RoystonSanctis)
