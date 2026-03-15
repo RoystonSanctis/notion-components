@@ -1,11 +1,8 @@
 {
   "name": "notion-components",
   "version": "1.0.0",
-  "description": "A collection of reusable components for working with the **Notion API**.",
-  "main": "index.js",
-  "directories": {
-    "example": "examples"
-  },
+  "description": "Reusable components for the Notion API — convert Notion blocks to Markdown with rich text, media, equations, table of contents, and child page support.",
+  "main": "converters/notionToMarkdown.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -13,9 +10,16 @@
     "type": "git",
     "url": "git+https://github.com/RoystonSanctis/notion-components.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "notion",
+    "markdown",
+    "converter",
+    "notion-api",
+    "blocks",
+    "automation"
+  ],
+  "author": "RoystonSanctis (https://github.com/RoystonSanctis)",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/RoystonSanctis/notion-components/issues"
   },
