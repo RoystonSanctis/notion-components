@@ -6,15 +6,84 @@
  * - Renders toggle as bold list item + indented children
  * - Renders callout as quoted block with emoji (uses icon.emoji if present)
  * - Renders child_page / link_to_page with title + page_id
- * - Renders media blocks (image, video, audio, file, bookmark) as Markdown links/images
+ * - Renders media blocks (image, video, audio, file, bookmark, pdf, embed) as Markdown links/images
+ * - Renders equation blocks (block-level and inline)
+ * - Generates table_of_contents from heading blocks
+ * - Optionally fetches child blocks from Notion API (requires auth)
+ * - Supports parseChildPages / separateChildPage config for child page handling
+ * - Rate-limited API calls (~3 requests/second)
  * - Unsupported / exotic blocks → full unmodified raw block object in unsupportedMarkdownBlocks
  * - No HTML comments inside markdown output
  * - Uses JSON.parse(JSON.stringify()) for deep copy (compatible with older environments)
  *
  * @param {Array}  blocks - Notion API blocks array
- * @param {Object} config - Optional configuration object for future feature flags
+ * @param {Object} config - Optional configuration object
+ * @param {boolean}       config.parseChildPages   - Fetch and process child page blocks (default: false)
+ * @param {boolean}       config.separateChildPage - Return child pages separately instead of inlined (default: false)
+ * @param {string|boolean} config.auth             - Notion auth: string = API key, true = no auth header (backend proxy), false/undefined = no API calls
  */
-function notionToMarkdown(blocks, config = {}) {
+
+const NOTION_VERSION = "2026-03-11";
+
+const axios = require("axios");
+
+// ── Rate limiter ─────────────────────────────────────────────────────────────
+let _lastApiCallTime = 0;
+const MIN_API_INTERVAL_MS = 334; // ~3 requests per second
+
+async function _rateLimitedRequest(config) {
+    const now = Date.now();
+    const elapsed = now - _lastApiCallTime;
+    if (elapsed < MIN_API_INTERVAL_MS) {
+        await new Promise(resolve => setTimeout(resolve, MIN_API_INTERVAL_MS - elapsed));
+    }
+    _lastApiCallTime = Date.now();
+    return axios(config);
+}
+
+// ── Fetch all children of a block (handles pagination) ───────────────────────
+async function fetchBlockChildren(blockId, headers) {
+    const allChildren = [];
+    let cursor = undefined;
+    let hasMore = true;
+
+    while (hasMore) {
+        const params = {};
+        if (cursor) params.start_cursor = cursor;
+
+        const response = await _rateLimitedRequest({
+            method: "GET",
+            url: `https://api.notion.com/v1/blocks/${blockId}/children`,
+            headers: headers,
+            params: params
+        });
+
+        const data = response.data;
+        if (Array.isArray(data.results)) {
+            allChildren.push(...data.results);
+        }
+
+        hasMore = data.has_more === true;
+        cursor = data.next_cursor || undefined;
+    }
+
+    return allChildren;
+}
+
+// ── Build Notion API headers based on auth config ────────────────────────────
+function _buildHeaders(auth) {
+    const headers = {
+        "Notion-Version": NOTION_VERSION
+    };
+    if (typeof auth === "string") {
+        headers["Authorization"] = `Bearer ${auth}`;
+    }
+    // If auth === true, only Notion-Version is sent (backend proxies auth)
+    return headers;
+}
+
+// ── Main converter ───────────────────────────────────────────────────────────
+async function notionToMarkdown(blocks, config = {}) {
     if (!Array.isArray(blocks)) {
         return {
             markdownContent: "",
@@ -22,7 +91,16 @@ function notionToMarkdown(blocks, config = {}) {
         };
     }
 
+    const {
+        parseChildPages = false,
+        separateChildPage = false,
+        auth = undefined
+    } = config;
+
     const unsupportedMarkdownBlocks = [];
+    const childPages = [];
+    const canFetch = auth === true || typeof auth === "string";
+    const headers = canFetch ? _buildHeaders(auth) : null;
 
     // ── Parse rich_text (official Notion API format) ───────────────────────────
     function parseRichText(richTextArray = []) {
@@ -32,6 +110,11 @@ function notionToMarkdown(blocks, config = {}) {
             let text = item.plain_text || "";
 
             if (!text) return "";
+
+            // Inline equation
+            if (item.type === "equation") {
+                return `$${text}$`;
+            }
 
             const ann = item.annotations || {};
 
@@ -49,7 +132,32 @@ function notionToMarkdown(blocks, config = {}) {
         }).join("");
     }
 
-    function convert(blocks, depth = 0) {
+    // ── Generate Table of Contents from heading blocks ────────────────────────
+    function generateToc(allBlocks) {
+        const tocLines = [];
+        for (const b of allBlocks) {
+            if (b.type === "heading_1" || b.type === "heading_2" || b.type === "heading_3") {
+                const headingData = b[b.type] || {};
+                const headingText = parseRichText(headingData.rich_text || []);
+                if (!headingText.trim()) continue;
+
+                const anchor = headingText
+                    .toLowerCase()
+                    .replace(/[^\w\s-]/g, "")
+                    .replace(/\s+/g, "-");
+
+                let indent = "";
+                if (b.type === "heading_2") indent = "  ";
+                if (b.type === "heading_3") indent = "    ";
+
+                tocLines.push(`${indent}- [${headingText}](#${anchor})`);
+            }
+        }
+        return tocLines.length > 0 ? tocLines.join("\n") + "\n\n" : "";
+    }
+
+    // ── Core converter (async for API fetching) ──────────────────────────────
+    async function convert(blocks, allBlocks, depth = 0) {
         const indent = "  ".repeat(depth);
         let md = "";
         let numberCounter = 1;
@@ -173,9 +281,22 @@ function notionToMarkdown(blocks, config = {}) {
                     break;
                 }
 
+                case "equation": {
+                    const expr = data.expression || "";
+                    if (expr) {
+                        line = `$$${expr}$$\n\n`;
+                    }
+                    break;
+                }
+
                 case "divider":
                     line = `${indent}---\n\n`;
                     numberCounter = 1;
+                    break;
+
+                // ── Table of Contents ────────────────────────────────────────────────
+                case "table_of_contents":
+                    line = generateToc(allBlocks);
                     break;
 
                 // ── Rendered with approximation ──────────────────────────────────────
@@ -189,11 +310,39 @@ function notionToMarkdown(blocks, config = {}) {
                     break;
 
                 // ── Rendered with page reference ─────────────────────────────────────
-                case "child_page":
+                case "child_page": {
                     const childTitle = data.title || "Untitled page";
-                    const childId = block.id; // child_page uses own block id as page id
-                    line = `${indent}[Child page: ${childTitle}] (page_id: ${childId})\n\n`;
+                    const childId = block.id;
+
+                    if (parseChildPages && canFetch) {
+                        try {
+                            const pageChildren = await fetchBlockChildren(childId, headers);
+
+                            if (separateChildPage) {
+                                // Convert child page separately
+                                const childResult = await convert(pageChildren, pageChildren, 0);
+                                childPages.push({
+                                    pageId: childId,
+                                    title: childTitle,
+                                    markdownContent: childResult.trim()
+                                });
+                                line = `${indent}[Child page: ${childTitle}] (page_id: ${childId})\n\n`;
+                            } else {
+                                // Inline child page as a section
+                                line = `${indent}## ${childTitle}\n\n`;
+                                const inlinedContent = await convert(pageChildren, pageChildren, depth);
+                                line += inlinedContent;
+                            }
+                        } catch (err) {
+                            // On fetch failure, log error and fall back to reference
+                            console.error(`[notionToMarkdown] Failed to fetch child page "${childTitle}" (${childId}):`, err.message || err);
+                            line = `${indent}[Child page: ${childTitle}] (page_id: ${childId})\n\n`;
+                        }
+                    } else {
+                        line = `${indent}[Child page: ${childTitle}] (page_id: ${childId})\n\n`;
+                    }
                     break;
+                }
 
                 case "link_to_page":
                     const linkedId = data.page_id || "(missing page id)";
@@ -203,12 +352,10 @@ function notionToMarkdown(blocks, config = {}) {
 
                 // ── Not rendered → store full unmodified raw block via JSON copy ──────
                 case "table":
-                case "equation":
                 case "synced_block":
                 case "template":
                 case "column_list":
                 case "breadcrumb":
-                case "table_of_contents":
                 case "unsupported":
                     unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
                     if (md.trim() !== "" && !text.trim()) {
@@ -233,19 +380,41 @@ function notionToMarkdown(blocks, config = {}) {
             md += line;
 
             // ── Recurse children ─────────────────────────────────────────────────
-            if (block.has_children && Array.isArray(block.children) && block.children.length > 0) {
-                const extra = ["bulleted_list_item", "numbered_list_item", "to_do", "toggle"].includes(type) ? 1 : 0;
-                md += convert(block.children, depth + extra);
+            // Skip child_page — already handled above
+            if (type !== "child_page" && block.has_children) {
+                let children = Array.isArray(block.children) && block.children.length > 0
+                    ? block.children
+                    : null;
+
+                // Fetch children from API if not pre-loaded
+                if (!children && canFetch) {
+                    try {
+                        children = await fetchBlockChildren(block.id, headers);
+                    } catch (err) {
+                        // Silently skip on fetch failure
+                    }
+                }
+
+                if (children && children.length > 0) {
+                    const extra = ["bulleted_list_item", "numbered_list_item", "to_do", "toggle"].includes(type) ? 1 : 0;
+                    md += await convert(children, allBlocks, depth + extra);
+                }
             }
         }
 
         return md;
     }
 
-    const markdown = convert(blocks).trim();
+    const markdown = (await convert(blocks, blocks)).trim();
 
-    return {
+    const result = {
         markdownContent: markdown,
         unsupportedMarkdownBlocks: unsupportedMarkdownBlocks.length ? unsupportedMarkdownBlocks : []
     };
+
+    if (separateChildPage) {
+        result.childPages = childPages;
+    }
+
+    return result;
 }
