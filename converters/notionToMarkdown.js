@@ -134,26 +134,77 @@ async function notionToMarkdown(blocks, config = {}) {
 
     // ── Generate Table of Contents from heading blocks ────────────────────────
     function generateToc(allBlocks) {
-        const tocLines = [];
+        const tree = [];
+        const stack = [];
+
         for (const b of allBlocks) {
             if (b.type === "heading_1" || b.type === "heading_2" || b.type === "heading_3") {
                 const headingData = b[b.type] || {};
-                const headingText = parseRichText(headingData.rich_text || []);
-                if (!headingText.trim()) continue;
+                let headingText = parseRichText(headingData.rich_text || []);
+                headingText = headingText.trim();
+                if (!headingText) continue;
 
-                const anchor = headingText
-                    .toLowerCase()
-                    .replace(/[^\w\s-]/g, "")
-                    .replace(/\s+/g, "-");
+                const level = parseInt(b.type.split("_")[1]);
+                const node = { text: headingText, level, children: [] };
 
-                let indent = "";
-                if (b.type === "heading_2") indent = "  ";
-                if (b.type === "heading_3") indent = "    ";
+                while (stack.length > 0 && stack[stack.length - 1].level >= level) {
+                    stack.pop();
+                }
 
-                tocLines.push(`${indent}- [${headingText}](#${anchor})`);
+                if (stack.length === 0) {
+                    tree.push(node);
+                } else {
+                    stack[stack.length - 1].children.push(node);
+                }
+
+                stack.push(node);
             }
         }
-        return tocLines.length > 0 ? tocLines.join("\n") + "\n\n" : "";
+
+        if (tree.length === 0) return "";
+
+        function renderNode(node, prefix, isLast, isRoot) {
+            let res = "";
+            const hasChildren = node.children.length > 0;
+            const suffix = hasChildren ? "/" : "";
+
+            if (isRoot) {
+                res += `${node.text}${suffix}\n`;
+                if (hasChildren) {
+                    res += `│\n`;
+                    for (let i = 0; i < node.children.length; i++) {
+                        const child = node.children[i];
+                        const childIsLast = (i === node.children.length - 1);
+                        res += renderNode(child, "", childIsLast, false);
+                        if (!childIsLast) {
+                            res += `│\n`;
+                        }
+                    }
+                }
+            } else {
+                const connector = isLast ? "└── " : "├── ";
+                res += `${prefix}${connector}${node.text}${suffix}\n`;
+                if (hasChildren) {
+                    const childPrefix = prefix + (isLast ? "    " : "│   ");
+                    for (let i = 0; i < node.children.length; i++) {
+                        const child = node.children[i];
+                        const childIsLast = (i === node.children.length - 1);
+                        res += renderNode(child, childPrefix, childIsLast, false);
+                    }
+                }
+            }
+            return res;
+        }
+
+        let tocStr = "";
+        for (let i = 0; i < tree.length; i++) {
+            tocStr += renderNode(tree[i], "", i === tree.length - 1, true);
+            if (i < tree.length - 1) {
+                tocStr += "\n";
+            }
+        }
+
+        return `## Table of Content\n\n\`\`\`text\n${tocStr.trimEnd()}\n\`\`\`\n\n`;
     }
 
     // ── Core converter (async for API fetching) ──────────────────────────────
