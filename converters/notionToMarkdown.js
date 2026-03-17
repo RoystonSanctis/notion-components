@@ -401,8 +401,83 @@ async function notionToMarkdown(blocks, config = {}) {
                     line = `${indent}[Linked page: ${linkedTitle}] (page_id: ${linkedId})\n\n`;
                     break;
 
+                // ── Table ────────────────────────────────────────────────────────────
+                case "table": {
+                    let rows = Array.isArray(block.children) && block.children.length > 0
+                        ? block.children
+                        : null;
+
+                    // Only attempt to fetch if parseChildPages and auth are enabled
+                    if (!rows && parseChildPages && canFetch && block.has_children) {
+                        try {
+                            rows = await fetchBlockChildren(block.id, headers);
+                        } catch (err) {
+                            console.error(`[notionToMarkdown] Failed to fetch table rows (${block.id}):`, err.message || err);
+                        }
+                    }
+
+                    // Only build table MD if we managed to retrieve rows
+                    if (rows && rows.length > 0) {
+                        const tableWidth = data.table_width || 0;
+                        const hasColHeader = data.has_column_header || false;
+                        const hasRowHeader = data.has_row_header || false;
+                        
+                        let tableMd = "";
+                        
+                        if (!hasColHeader) {
+                            let emptyHeader = "|";
+                            let sepStr = "|";
+                            for (let j = 0; j < tableWidth; j++) {
+                                emptyHeader += "   |";
+                                sepStr += "---|";
+                            }
+                            tableMd += `${indent}${emptyHeader}\n${indent}${sepStr}\n`;
+                        }
+
+                        for (let i = 0; i < rows.length; i++) {
+                            const rowBlock = rows[i];
+                            if (rowBlock.type !== "table_row") continue;
+                            const rowData = rowBlock.table_row || {};
+                            const cells = rowData.cells || [];
+                            
+                            let rowStr = "|";
+                            for (let j = 0; j < tableWidth; j++) {
+                                let cellText = parseRichText(cells[j] || []);
+                                cellText = cellText.replace(/\n/g, "<br>");
+                                
+                                if (hasRowHeader && j === 0) {
+                                    // Vertical header (first cell of any row)
+                                    cellText = `**${cellText}**`;
+                                } else if (hasColHeader && i === 0) {
+                                    // Horizontal header (any cell of the first row)
+                                    cellText = `**${cellText}**`;
+                                }
+                                
+                                rowStr += ` ${cellText} |`;
+                            }
+                            tableMd += `${indent}${rowStr}\n`;
+                            
+                            if (hasColHeader && i === 0) {
+                                let sepStr = "|";
+                                for (let j = 0; j < tableWidth; j++) {
+                                    sepStr += "---|";
+                                }
+                                tableMd += `${indent}${sepStr}\n`;
+                            }
+                        }
+                        
+                        line = `${tableMd}\n`;
+                    } else {
+                        // Fallback to storing as an unsupported block
+                        unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                        
+                        // Output a placeholder in Markdown referencing this table block
+                        line = `${indent}[Table Block] (block_id: ${block.id})\n\n`;
+                    }
+                    break;
+                }
+
                 // ── Not rendered → store full unmodified raw block via JSON copy ──────
-                case "table":
                 case "synced_block":
                 case "template":
                 case "column_list":
@@ -431,8 +506,8 @@ async function notionToMarkdown(blocks, config = {}) {
             md += line;
 
             // ── Recurse children ─────────────────────────────────────────────────
-            // Skip child_page — already handled above
-            if (type !== "child_page" && block.has_children) {
+            // Skip child_page and table — already handled above
+            if (type !== "child_page" && type !== "table" && block.has_children) {
                 let children = Array.isArray(block.children) && block.children.length > 0
                     ? block.children
                     : null;

@@ -70,6 +70,7 @@ Converts a Notion API block array into a Markdown string.
 | pdf | `[📄 filename](url)` |
 | embed | `[🌐 url](url)` |
 | equation | `$$expression$$` (block) / `$expression$` (inline) |
+| table | Table with row/column headers |
 | table_of_contents | Auto-generated TOC from headings |
 
 Unsupported blocks are stored separately for further processing.
@@ -163,7 +164,6 @@ Upcoming utilities:
 
 - Markdown → Notion block converter
 - Notion rich text utilities
-- Table conversion helpers
 - Notion page export tools
 
 ## Use Cases
