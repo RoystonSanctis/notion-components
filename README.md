@@ -72,6 +72,7 @@ Converts a Notion API block array into a Markdown string.
 | equation | `$$expression$$` (block) / `$expression$` (inline) |
 | table | Table with row/column headers |
 | table_of_contents | Auto-generated TOC from headings |
+| breadcrumb | Fetch parent page/database/data_source recursively to build breadcrumb |
 
 Unsupported blocks are stored separately for further processing.
 

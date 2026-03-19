@@ -70,6 +70,86 @@ async function fetchBlockChildren(blockId, headers) {
     return allChildren;
 }
 
+// ── Fetch parent page/database/data_source recursively to build breadcrumb ───────────────
+async function fetchBreadcrumbs(block, headers) {
+    if (!headers) return "🏠 Breadcrumb";
+
+    const path = [];
+    let currentParent = block.parent;
+
+    while (currentParent && currentParent.type !== "workspace") {
+        try {
+            if (currentParent.type === "page_id") {
+                const res = await _rateLimitedRequest({
+                    method: "GET",
+                    url: `https://api.notion.com/v1/pages/${currentParent.page_id}`,
+                    headers: headers
+                });
+                const page = res.data;
+                let title = "Untitled";
+                if (page.properties) {
+                    const titleProp = Object.values(page.properties).find(p => p.type === "title" || p.id === "title");
+                    if (titleProp && titleProp.title && titleProp.title.length > 0) {
+                        title = titleProp.title.map(t => t.plain_text).join("");
+                    }
+                }
+                if (page.icon && page.icon.type === "emoji") {
+                    title = `${page.icon.emoji} ${title}`;
+                }
+                path.unshift(title);
+                currentParent = page.parent;
+            } else if (currentParent.type === "database_id") {
+                const res = await _rateLimitedRequest({
+                    method: "GET",
+                    url: `https://api.notion.com/v1/databases/${currentParent.database_id}`,
+                    headers: headers
+                });
+                const database = res.data;
+                let title = "Untitled";
+                if (database.title && database.title.length > 0) {
+                    title = database.title.map(t => t.plain_text).join("");
+                }
+                if (database.icon && database.icon.type === "emoji") {
+                    title = `${database.icon.emoji} ${title}`;
+                }
+                path.unshift(title);
+                currentParent = database.parent;
+            } else if (currentParent.type === "data_source_id") {
+                const res = await _rateLimitedRequest({
+                    method: "GET",
+                    url: `https://api.notion.com/v1/data_sources/${currentParent.data_source_id}`,
+                    headers: headers
+                });
+                const dataSource = res.data;
+                let title = "Untitled";
+                if (dataSource.title && dataSource.title.length > 0) {
+                    title = dataSource.title.map(t => t.plain_text).join("");
+                }
+                if (dataSource.icon && dataSource.icon.type === "emoji") {
+                    title = `${dataSource.icon.emoji} ${title}`;
+                }
+                path.unshift(title);
+                currentParent = dataSource.parent;  // usually { type: "database_id", ... }
+            } else if (currentParent.type === "block_id") {
+                const res = await _rateLimitedRequest({
+                    method: "GET",
+                    url: `https://api.notion.com/v1/blocks/${currentParent.block_id}`,
+                    headers: headers
+                });
+                const b = res.data;
+                currentParent = b.parent;
+            } else {
+                break;
+            }
+        } catch (err) {
+            console.error(`[notionToMarkdown] Failed to fetch breadcrumb parent:`, err.message || err);
+            break;
+        }
+    }
+
+    return path.length > 0 ? path.join(" / ") : "🏠 Breadcrumb";
+}
+
 // ── Build Notion API headers based on auth config ────────────────────────────
 function _buildHeaders(auth) {
     const headers = {
@@ -421,9 +501,9 @@ async function notionToMarkdown(blocks, config = {}) {
                         const tableWidth = data.table_width || 0;
                         const hasColHeader = data.has_column_header || false;
                         const hasRowHeader = data.has_row_header || false;
-                        
+
                         let tableMd = "";
-                        
+
                         if (!hasColHeader) {
                             let emptyHeader = "|";
                             let sepStr = "|";
@@ -439,12 +519,12 @@ async function notionToMarkdown(blocks, config = {}) {
                             if (rowBlock.type !== "table_row") continue;
                             const rowData = rowBlock.table_row || {};
                             const cells = rowData.cells || [];
-                            
+
                             let rowStr = "|";
                             for (let j = 0; j < tableWidth; j++) {
                                 let cellText = parseRichText(cells[j] || []);
                                 cellText = cellText.replace(/\n/g, "<br>");
-                                
+
                                 if (hasRowHeader && j === 0) {
                                     // Vertical header (first cell of any row)
                                     cellText = `**${cellText}**`;
@@ -452,11 +532,11 @@ async function notionToMarkdown(blocks, config = {}) {
                                     // Horizontal header (any cell of the first row)
                                     cellText = `**${cellText}**`;
                                 }
-                                
+
                                 rowStr += ` ${cellText} |`;
                             }
                             tableMd += `${indent}${rowStr}\n`;
-                            
+
                             if (hasColHeader && i === 0) {
                                 let sepStr = "|";
                                 for (let j = 0; j < tableWidth; j++) {
@@ -465,12 +545,12 @@ async function notionToMarkdown(blocks, config = {}) {
                                 tableMd += `${indent}${sepStr}\n`;
                             }
                         }
-                        
+
                         line = `${tableMd}\n`;
                     } else {
                         // Fallback to storing as an unsupported block
                         unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
-                        
+
                         // Output a placeholder in Markdown referencing this table block
                         line = `${indent}[Table Block] (block_id: ${block.id})\n\n`;
                     }
@@ -478,10 +558,19 @@ async function notionToMarkdown(blocks, config = {}) {
                 }
 
                 // ── Not rendered → store full unmodified raw block via JSON copy ──────
+                case "breadcrumb":
+                    if (canFetch && block.parent) {
+                        const breadcrumbText = await fetchBreadcrumbs(block, headers);
+                        line = `${indent}${breadcrumbText}\n\n`;
+                    } else {
+                        unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                        line = `${indent}🏠 Breadcrumb\n\n`;
+                    }
+                    break;
+
                 case "synced_block":
                 case "template":
                 case "column_list":
-                case "breadcrumb":
                 case "unsupported":
                     unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
                     if (md.trim() !== "" && !text.trim()) {
