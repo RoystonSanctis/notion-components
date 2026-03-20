@@ -15,6 +15,7 @@
  * - Unsupported / exotic blocks → full unmodified raw block object in unsupportedMarkdownBlocks
  * - No HTML comments inside markdown output
  * - Uses JSON.parse(JSON.stringify()) for deep copy (compatible with older environments)
+ * - Supports column_list + column layout using <div class="notion-row"> and <div class="notion-column">
  *
  * @param {Array}  blocks - Notion API blocks array
  * @param {Object} config - Optional configuration object
@@ -129,7 +130,7 @@ async function fetchBreadcrumbs(block, headers) {
                     title = `${dataSource.icon.emoji} ${title}`;
                 }
                 path.unshift(title);
-                currentParent = dataSource.parent;  // usually { type: "database_id", ... }
+                currentParent = dataSource.parent;
             } else if (currentParent.type === "block_id") {
                 const res = await _rateLimitedRequest({
                     method: "GET",
@@ -292,16 +293,82 @@ async function notionToMarkdown(blocks, config = {}) {
         const indent = "  ".repeat(depth);
         let md = "";
         let numberCounter = 1;
+        let inRow = false;
 
-        for (const block of blocks) {
+        for (let i = 0; i < blocks.length; i++) {
+            const block = blocks[i];
             const type = block.type;
+
+            // ── Column layout handling ───────────────────────────────────────────
+            if (type === "column_list") {
+                if (!canFetch || !block.has_children) {
+                    unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                    continue;
+                }
+
+                let columns = Array.isArray(block.children) && block.children.length > 0
+                    ? block.children
+                    : null;
+
+                try {
+                    if (!columns) {
+                        columns = await fetchBlockChildren(block.id, headers);
+                    }
+                } catch (err) {
+                    console.error(`[notionToMarkdown] Failed to fetch column_list children (${block.id}):`, err.message || err);
+                    unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                    continue;
+                }
+
+                if (!columns || columns.length === 0) {
+                    continue;
+                }
+
+                md += `<div class="notion-row">\n\n`;
+                inRow = true;
+
+                for (const col of columns) {
+                    if (col.type !== "column") continue;
+
+                    let colChildren = Array.isArray(col.children) && col.children.length > 0
+                        ? col.children
+                        : null;
+
+                    if (!colChildren && col.has_children) {
+                        try {
+                            colChildren = await fetchBlockChildren(col.id, headers);
+                        } catch (err) {
+                            console.error(`[notionToMarkdown] Failed to fetch column children (${col.id}):`, err.message || err);
+                            colChildren = [];
+                        }
+                    }
+
+                    let columnMd = `<div class="notion-column">\n\n`;
+
+                    if (colChildren && colChildren.length > 0) {
+                        columnMd += await convert(colChildren, allBlocks, depth);
+                    }
+
+                    columnMd += `</div>\n\n`;
+
+                    md += columnMd;
+                }
+
+                continue;
+            }
+
+            // Close row when leaving column_list context
+            if (inRow && type !== "column_list" && type !== "column") {
+                md += `</div>\n\n`;
+                inRow = false;
+            }
+
             const data = block[type] || {};
             const text = parseRichText(data.rich_text || []);
 
             let line = "";
 
             switch (type) {
-                // ── Fully rendered ───────────────────────────────────────────────────
                 case "paragraph":
                     if (text.trim()) line = `${text}\n\n`;
                     break;
@@ -341,42 +408,35 @@ async function notionToMarkdown(blocks, config = {}) {
                     line = `\`\`\`${lang}\n${text}\n\`\`\`\n\n`;
                     break;
 
-                // ── Media blocks ─────────────────────────────────────────────────────
                 case "image": {
                     const imgCaption = parseRichText(data.caption || []) || "image";
-                    const imgUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
-                    if (imgUrl) {
-                        line = `![${imgCaption}](${imgUrl})\n\n`;
-                    }
+                    const imgUrl = (data.external?.url) || (data.file?.url) || "";
+                    if (imgUrl) line = `![${imgCaption}](${imgUrl})\n\n`;
                     break;
                 }
 
                 case "video": {
                     const vidCaption = parseRichText(data.caption || []);
-                    const vidUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    const vidUrl = (data.external?.url) || (data.file?.url) || "";
                     if (vidUrl) {
-                        line = `[▶ Video](${vidUrl})\n\n`;
-                        if (vidCaption) line = `[▶ ${vidCaption}](${vidUrl})\n\n`;
+                        line = vidCaption ? `[▶ ${vidCaption}](${vidUrl})\n\n` : `[▶ Video](${vidUrl})\n\n`;
                     }
                     break;
                 }
 
                 case "audio": {
                     const audCaption = parseRichText(data.caption || []);
-                    const audUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    const audUrl = (data.external?.url) || (data.file?.url) || "";
                     if (audUrl) {
-                        line = `[🔊 Audio](${audUrl})\n\n`;
-                        if (audCaption) line = `[🔊 ${audCaption}](${audUrl})\n\n`;
+                        line = audCaption ? `[🔊 ${audCaption}](${audUrl})\n\n` : `[🔊 Audio](${audUrl})\n\n`;
                     }
                     break;
                 }
 
                 case "file": {
-                    const fileUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    const fileUrl = (data.external?.url) || (data.file?.url) || "";
                     const fileName = data.name || fileUrl.split("/").pop() || "file";
-                    if (fileUrl) {
-                        line = `[📎 ${fileName}](${fileUrl})\n\n`;
-                    }
+                    if (fileUrl) line = `[📎 ${fileName}](${fileUrl})\n\n`;
                     break;
                 }
 
@@ -384,20 +444,16 @@ async function notionToMarkdown(blocks, config = {}) {
                     const bmCaption = parseRichText(data.caption || []);
                     const bmUrl = data.url || "";
                     if (bmUrl) {
-                        line = bmCaption
-                            ? `[🔗 ${bmCaption}](${bmUrl})\n\n`
-                            : `[🔗 ${bmUrl}](${bmUrl})\n\n`;
+                        line = bmCaption ? `[🔗 ${bmCaption}](${bmUrl})\n\n` : `[🔗 ${bmUrl}](${bmUrl})\n\n`;
                     }
                     break;
                 }
 
                 case "pdf": {
-                    const pdfUrl = (data.external && data.external.url) || (data.file && data.file.url) || "";
+                    const pdfUrl = (data.external?.url) || (data.file?.url) || "";
                     const pdfCaption = parseRichText(data.caption || []);
                     const pdfName = pdfCaption || pdfUrl.split("/").pop() || "PDF";
-                    if (pdfUrl) {
-                        line = `[📄 ${pdfName}](${pdfUrl})\n\n`;
-                    }
+                    if (pdfUrl) line = `[📄 ${pdfName}](${pdfUrl})\n\n`;
                     break;
                 }
 
@@ -405,18 +461,14 @@ async function notionToMarkdown(blocks, config = {}) {
                     const embedUrl = data.url || "";
                     const embedCaption = parseRichText(data.caption || []);
                     if (embedUrl) {
-                        line = embedCaption
-                            ? `[🌐 ${embedCaption}](${embedUrl})\n\n`
-                            : `[🌐 ${embedUrl}](${embedUrl})\n\n`;
+                        line = embedCaption ? `[🌐 ${embedCaption}](${embedUrl})\n\n` : `[🌐 ${embedUrl}](${embedUrl})\n\n`;
                     }
                     break;
                 }
 
                 case "equation": {
                     const expr = data.expression || "";
-                    if (expr) {
-                        line = `$$${expr}$$\n\n`;
-                    }
+                    if (expr) line = `$$${expr}$$\n\n`;
                     break;
                 }
 
@@ -425,22 +477,20 @@ async function notionToMarkdown(blocks, config = {}) {
                     numberCounter = 1;
                     break;
 
-                // ── Table of Contents ────────────────────────────────────────────────
                 case "table_of_contents":
                     line = generateToc(allBlocks);
                     break;
 
-                // ── Rendered with approximation ──────────────────────────────────────
                 case "toggle":
                     line = `${indent}- **${text || "Toggle"}**\n`;
                     break;
 
-                case "callout":
-                    let emoji = data.icon?.emoji || "📌";
+                case "callout": {
+                    const emoji = data.icon?.emoji || "📌";
                     line = `${indent}> **${emoji} ${text || "Callout"}**\n`;
                     break;
+                }
 
-                // ── Rendered with page reference ─────────────────────────────────────
                 case "child_page": {
                     const childTitle = data.title || "Untitled page";
                     const childId = block.id;
@@ -448,9 +498,7 @@ async function notionToMarkdown(blocks, config = {}) {
                     if (parseChildPages && canFetch) {
                         try {
                             const pageChildren = await fetchBlockChildren(childId, headers);
-
                             if (separateChildPage) {
-                                // Convert child page separately
                                 const childResult = await convert(pageChildren, pageChildren, 0);
                                 childPages.push({
                                     pageId: childId,
@@ -459,14 +507,11 @@ async function notionToMarkdown(blocks, config = {}) {
                                 });
                                 line = `${indent}[Child page: ${childTitle}] (page_id: ${childId})\n\n`;
                             } else {
-                                // Inline child page as a section
                                 line = `${indent}## ${childTitle}\n\n`;
-                                const inlinedContent = await convert(pageChildren, pageChildren, depth);
-                                line += inlinedContent;
+                                line += await convert(pageChildren, pageChildren, depth);
                             }
                         } catch (err) {
-                            // On fetch failure, log error and fall back to reference
-                            console.error(`[notionToMarkdown] Failed to fetch child page "${childTitle}" (${childId}):`, err.message || err);
+                            console.error(`Failed to fetch child page "${childTitle}" (${childId}):`, err);
                             line = `${indent}[Child page: ${childTitle}] (page_id: ${childId})\n\n`;
                         }
                     } else {
@@ -475,28 +520,24 @@ async function notionToMarkdown(blocks, config = {}) {
                     break;
                 }
 
-                case "link_to_page":
+                case "link_to_page": {
                     const linkedId = data.page_id || "(missing page id)";
                     const linkedTitle = text.trim() || "Linked page";
                     line = `${indent}[Linked page: ${linkedTitle}] (page_id: ${linkedId})\n\n`;
                     break;
+                }
 
-                // ── Table ────────────────────────────────────────────────────────────
                 case "table": {
-                    let rows = Array.isArray(block.children) && block.children.length > 0
-                        ? block.children
-                        : null;
+                    let rows = Array.isArray(block.children) && block.children.length > 0 ? block.children : null;
 
-                    // Only attempt to fetch if parseChildPages and auth are enabled
                     if (!rows && parseChildPages && canFetch && block.has_children) {
                         try {
                             rows = await fetchBlockChildren(block.id, headers);
                         } catch (err) {
-                            console.error(`[notionToMarkdown] Failed to fetch table rows (${block.id}):`, err.message || err);
+                            console.error(`Failed to fetch table rows (${block.id}):`, err);
                         }
                     }
 
-                    // Only build table MD if we managed to retrieve rows
                     if (rows && rows.length > 0) {
                         const tableWidth = data.table_width || 0;
                         const hasColHeader = data.has_column_header || false;
@@ -526,10 +567,8 @@ async function notionToMarkdown(blocks, config = {}) {
                                 cellText = cellText.replace(/\n/g, "<br>");
 
                                 if (hasRowHeader && j === 0) {
-                                    // Vertical header (first cell of any row)
                                     cellText = `**${cellText}**`;
                                 } else if (hasColHeader && i === 0) {
-                                    // Horizontal header (any cell of the first row)
                                     cellText = `**${cellText}**`;
                                 }
 
@@ -548,16 +587,12 @@ async function notionToMarkdown(blocks, config = {}) {
 
                         line = `${tableMd}\n`;
                     } else {
-                        // Fallback to storing as an unsupported block
                         unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
-
-                        // Output a placeholder in Markdown referencing this table block
                         line = `${indent}[Table Block] (block_id: ${block.id})\n\n`;
                     }
                     break;
                 }
 
-                // ── Not rendered → store full unmodified raw block via JSON copy ──────
                 case "breadcrumb":
                     if (canFetch && block.parent) {
                         const breadcrumbText = await fetchBreadcrumbs(block, headers);
@@ -568,45 +603,38 @@ async function notionToMarkdown(blocks, config = {}) {
                     }
                     break;
 
+                case "column":
+                    // Should not be reached directly
+                    unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                    line = `${indent}[Standalone column]\n\n`;
+                    break;
+
                 case "synced_block":
                 case "template":
-                case "column_list":
                 case "unsupported":
                     unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
-                    if (md.trim() !== "" && !text.trim()) {
-                        line = "---\n\n";
-                    }
-                    if (text.trim()) {
-                        line += `${indent}${text}\n\n`;
-                    }
+                    if (text.trim()) line += `${indent}${text}\n\n`;
                     break;
 
                 default:
                     unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
-                    if (md.trim() !== "" && !text.trim()) {
-                        line = "---\n\n";
-                    }
-                    if (text.trim()) {
-                        line += `${indent}${text}\n\n`;
-                    }
+                    if (text.trim()) line += `${indent}${text}\n\n`;
                     break;
             }
 
             md += line;
 
             // ── Recurse children ─────────────────────────────────────────────────
-            // Skip child_page and table — already handled above
-            if (type !== "child_page" && type !== "table" && block.has_children) {
+            if (!["child_page", "table", "column_list", "column"].includes(type) && block.has_children) {
                 let children = Array.isArray(block.children) && block.children.length > 0
                     ? block.children
                     : null;
 
-                // Fetch children from API if not pre-loaded
                 if (!children && canFetch) {
                     try {
                         children = await fetchBlockChildren(block.id, headers);
                     } catch (err) {
-                        // Silently skip on fetch failure
+                        // silent fail
                     }
                 }
 
@@ -615,6 +643,10 @@ async function notionToMarkdown(blocks, config = {}) {
                     md += await convert(children, allBlocks, depth + extra);
                 }
             }
+        }
+
+        if (inRow) {
+            md += `</div>\n\n`;
         }
 
         return md;
@@ -633,3 +665,5 @@ async function notionToMarkdown(blocks, config = {}) {
 
     return result;
 }
+
+module.exports = notionToMarkdown;

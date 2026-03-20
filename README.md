@@ -73,6 +73,8 @@ Converts a Notion API block array into a Markdown string.
 | table | Table with row/column headers |
 | table_of_contents | Auto-generated TOC from headings |
 | breadcrumb | Fetch parent page/database/data_source recursively to build breadcrumb |
+| column_list | HTML row (`<div class="notion-row">`) with nested columns |
+| column | HTML column (`<div class="notion-column">`) |
 
 Unsupported blocks are stored separately for further processing.
 
