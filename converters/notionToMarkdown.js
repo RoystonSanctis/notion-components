@@ -16,6 +16,7 @@
  * - No HTML comments inside markdown output
  * - Uses JSON.parse(JSON.stringify()) for deep copy (compatible with older environments)
  * - Supports column_list + column layout using <div class="notion-row"> and <div class="notion-column">
+ * - Supports tab blocks using <div class="notion-tabs"> and <div class="notion-tab"> with tab titles
  *
  * @param {Array}  blocks - Notion API blocks array
  * @param {Object} config - Optional configuration object
@@ -298,6 +299,57 @@ async function notionToMarkdown(blocks, config = {}) {
         for (let i = 0; i < blocks.length; i++) {
             const block = blocks[i];
             const type = block.type;
+
+            // ── Tab block handling ───────────────────────────────────────────────
+            if (type === "tab") {
+                if (!canFetch || !block.has_children) {
+                    unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                    continue;
+                }
+
+                let tabs = null;
+                try {
+                    tabs = await fetchBlockChildren(block.id, headers);
+                } catch (err) {
+                    console.error(`[notionToMarkdown] Failed to fetch tab children (${block.id}):`, err.message || err);
+                    unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                    continue;
+                }
+
+                if (!tabs || tabs.length === 0) {
+                    continue;
+                }
+
+                md += `<div class="notion-tabs">\n\n`;
+
+                for (const tab of tabs) {
+                    const tabData = tab[tab.type] || {};
+                    const tabTitle = parseRichText(tabData.rich_text || []) || "Tab";
+
+                    let tabChildren = null;
+                    if (tab.has_children) {
+                        try {
+                            tabChildren = await fetchBlockChildren(tab.id, headers);
+                        } catch (err) {
+                            console.error(`[notionToMarkdown] Failed to fetch tab content (${tab.id}):`, err.message || err);
+                            tabChildren = [];
+                        }
+                    }
+
+                    let tabMd = `<div class="notion-tab" data-title="${tabTitle}">\n\n`;
+                    tabMd += `#### ${tabTitle}\n\n`;
+
+                    if (tabChildren && tabChildren.length > 0) {
+                        tabMd += await convert(tabChildren, allBlocks, depth);
+                    }
+
+                    tabMd += `</div>\n\n`;
+                    md += tabMd;
+                }
+
+                md += `</div>\n\n`;
+                continue;
+            }
 
             // ── Column layout handling ───────────────────────────────────────────
             if (type === "column_list") {
@@ -625,7 +677,7 @@ async function notionToMarkdown(blocks, config = {}) {
             md += line;
 
             // ── Recurse children ─────────────────────────────────────────────────
-            if (!["child_page", "table", "column_list", "column"].includes(type) && block.has_children) {
+            if (!["child_page", "table", "column_list", "column", "tab"].includes(type) && block.has_children) {
                 let children = Array.isArray(block.children) && block.children.length > 0
                     ? block.children
                     : null;

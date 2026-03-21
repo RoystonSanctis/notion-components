@@ -75,6 +75,7 @@ Converts a Notion API block array into a Markdown string.
 | breadcrumb | Fetch parent page/database/data_source recursively to build breadcrumb |
 | column_list | HTML row (`<div class="notion-row">`) with nested columns |
 | column | HTML column (`<div class="notion-column">`) |
+| tab | Tabbed content (`<div class="notion-tabs">` / `<div class="notion-tab">`) |
 
 Unsupported blocks are stored separately for further processing.
 
