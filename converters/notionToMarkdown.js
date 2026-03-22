@@ -19,6 +19,10 @@
  * - Supports tab blocks using <div class="notion-tabs"> and <div class="notion-tab"> with tab titles
  * - Supports meeting_notes blocks with Summary, Notes, and Transcript sections
  * - Supports synced_block (original and reference) by rendering children transparently
+ * - Supports child_database with title and database_id
+ * - Supports link_preview as clickable URL
+ * - Supports template blocks (deprecated) by rendering rich_text + children
+ * - Supports transcription as alias for meeting_notes
  *
  * @param {Array}  blocks - Notion API blocks array
  * @param {Object} config - Optional configuration object
@@ -353,9 +357,10 @@ async function notionToMarkdown(blocks, config = {}) {
                 continue;
             }
 
-            // ── Meeting notes handling ───────────────────────────────────────────
-            if (type === "meeting_notes") {
-                const meetingData = block.meeting_notes || {};
+            // ── Meeting notes / transcription handling ────────────────────────────
+            // transcription was renamed to meeting_notes in API version 2026-03-11
+            if (type === "meeting_notes" || type === "transcription") {
+                const meetingData = block[type] || {};
                 const meetingTitle = parseRichText(meetingData.title || []) || "Meeting Notes";
                 const meetingStatus = meetingData.status || "";
                 const recordingTime = meetingData.recording?.start_time || "";
@@ -644,6 +649,21 @@ async function notionToMarkdown(blocks, config = {}) {
                     break;
                 }
 
+                case "child_database": {
+                    const dbTitle = data.title || "Untitled database";
+                    const dbId = block.id;
+                    line = `${indent}[Child database: ${dbTitle}] (database_id: ${dbId})\n\n`;
+                    break;
+                }
+
+                case "link_preview": {
+                    const previewUrl = data.url || "";
+                    if (previewUrl) {
+                        line = `[🔗 ${previewUrl}](${previewUrl})\n\n`;
+                    }
+                    break;
+                }
+
                 case "table": {
                     let rows = Array.isArray(block.children) && block.children.length > 0 ? block.children : null;
 
@@ -735,6 +755,11 @@ async function notionToMarkdown(blocks, config = {}) {
                     break;
 
                 case "template":
+                    // Template blocks are deprecated for creation but old blocks still exist.
+                    // Render like toggle: title text + indented children.
+                    line = `${indent}- **${text || "Template"}**\n`;
+                    break;
+
                 case "unsupported":
                     unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
                     if (text.trim()) line += `${indent}${text}\n\n`;
@@ -749,7 +774,7 @@ async function notionToMarkdown(blocks, config = {}) {
             md += line;
 
             // ── Recurse children ─────────────────────────────────────────────────
-            if (!["child_page", "table", "column_list", "column", "tab", "meeting_notes"].includes(type) && block.has_children) {
+            if (!["child_page", "table", "column_list", "column", "tab", "meeting_notes", "transcription"].includes(type) && block.has_children) {
                 let children = Array.isArray(block.children) && block.children.length > 0
                     ? block.children
                     : null;

@@ -78,6 +78,10 @@ Converts a Notion API block array into a Markdown string.
 | tab | Tabbed content (`<div class="notion-tabs">` / `<div class="notion-tab">`) |
 | meeting_notes | Meeting notes with Summary, Notes, Transcript sections |
 | synced_block | Synced block content (original and references) rendered transparently |
+| child_database | `[Child database: title] (database_id: id)` |
+| link_preview | `[🔗 url](url)` |
+| template | Deprecated; renders like toggle with rich text + children |
+| transcription | Alias for `meeting_notes` (renamed in API v2026-03-11) |
 
 Unsupported blocks are stored separately for further processing.
 
