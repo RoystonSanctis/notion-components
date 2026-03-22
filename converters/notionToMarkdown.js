@@ -23,7 +23,7 @@
  * - Supports link_preview as clickable URL
  * - Supports template blocks (deprecated) by rendering rich_text + children
  * - Supports transcription as alias for meeting_notes
- * - Renders inline mentions: @date (with ⏰ for reminders), @user (with user_id), 📄 page link, 🗄️ database link, 🔗 link_preview
+ * - Renders inline mentions: @date (with ⏰ for reminders), @user (with user_id), 📄 page link, 🗄️ database link, 🔗 link_preview, 🌐 link_mention (with title, description, thumbnail)
  *
  * @param {Array}  blocks - Notion API blocks array
  * @param {Object} config - Optional configuration object
@@ -244,6 +244,27 @@ async function notionToMarkdown(blocks, config = {}) {
                         return dbHref
                             ? `[🗄️ ${dbTitle}](${dbHref})`
                             : `🗄️ ${dbTitle} (database_id: ${dbId})`;
+                    }
+                    case "link_mention": {
+                        const lm = mention.link_mention || {};
+                        const lmHref = lm.href || item.href || "";
+                        const lmTitle = lm.title || "";
+                        const lmDesc = lm.description || "";
+                        const lmThumb = lm.thumbnail_url || "";
+                        const lmIcon = lm.icon_url || "";
+
+                        let lmParts = [];
+                        if (lmThumb) lmParts.push(`![${lmTitle || "thumbnail"}](${lmThumb})`);
+                        const displayTitle = lmTitle || lmHref;
+                        if (lmHref) {
+                            lmParts.push(`[🌐 ${displayTitle}](${lmHref})`);
+                        } else {
+                            lmParts.push(`🌐 ${displayTitle}`);
+                        }
+                        if (lmDesc) lmParts.push(lmDesc);
+                        if (lmIcon) lmParts.push(`Icon: ![icon](${lmIcon})`);
+
+                        return lmParts.join("\n");
                     }
                     case "link_preview": {
                         const previewUrl = mention.link_preview?.url || item.href || "";

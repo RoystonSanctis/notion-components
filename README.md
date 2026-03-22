@@ -95,6 +95,7 @@ Rich text mentions are rendered with context-aware formatting:
 | User | `@Name (user_id: id)` | Includes user ID |
 | Page | `[📄 title](notion_url)` | Clickable link to the page |
 | Database | `[🗄️ title](notion_url)` | Clickable link to the database |
+| Link mention | Thumbnail + `[🌐 title](url)` + description + icon | Rich preview with all metadata |
 | Link preview | `[🔗 text](url)` | Clickable preview link |
 
 Unsupported blocks are stored separately for further processing.
