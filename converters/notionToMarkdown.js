@@ -17,6 +17,7 @@
  * - Uses JSON.parse(JSON.stringify()) for deep copy (compatible with older environments)
  * - Supports column_list + column layout using <div class="notion-row"> and <div class="notion-column">
  * - Supports tab blocks using <div class="notion-tabs"> and <div class="notion-tab"> with tab titles
+ * - Supports meeting_notes blocks with Summary, Notes, and Transcript sections
  *
  * @param {Array}  blocks - Notion API blocks array
  * @param {Object} config - Optional configuration object
@@ -351,6 +352,69 @@ async function notionToMarkdown(blocks, config = {}) {
                 continue;
             }
 
+            // ── Meeting notes handling ───────────────────────────────────────────
+            if (type === "meeting_notes") {
+                const meetingData = block.meeting_notes || {};
+                const meetingTitle = parseRichText(meetingData.title || []) || "Meeting Notes";
+                const meetingStatus = meetingData.status || "";
+                const recordingTime = meetingData.recording?.start_time || "";
+                const sectionIds = meetingData.children || {};
+
+                md += `<div class="notion-meeting-notes">\n\n`;
+                md += `## 📋 ${meetingTitle}\n\n`;
+
+                // Metadata line
+                const metaParts = [];
+                if (meetingStatus) metaParts.push(`**Status:** ${meetingStatus.replace(/_/g, " ")}`);
+                if (recordingTime) metaParts.push(`**Recording started:** ${recordingTime}`);
+                if (metaParts.length > 0) {
+                    md += metaParts.join(" | ") + "\n\n";
+                }
+
+                if (canFetch && block.has_children) {
+                    const sectionMap = {
+                        summary_block_id: "Summary",
+                        notes_block_id: "Notes",
+                        transcript_block_id: "Transcript"
+                    };
+
+                    let allChildren = null;
+                    try {
+                        allChildren = await fetchBlockChildren(block.id, headers);
+                    } catch (err) {
+                        console.error(`[notionToMarkdown] Failed to fetch meeting_notes children (${block.id}):`, err.message || err);
+                    }
+
+                    if (allChildren && allChildren.length > 0) {
+                        for (const [idKey, label] of Object.entries(sectionMap)) {
+                            const sectionBlockId = sectionIds[idKey];
+                            const sectionBlock = sectionBlockId
+                                ? allChildren.find(c => c.id === sectionBlockId)
+                                : null;
+
+                            md += `### ${label}\n\n`;
+
+                            if (sectionBlock && sectionBlock.has_children) {
+                                let sectionChildren = null;
+                                try {
+                                    sectionChildren = await fetchBlockChildren(sectionBlock.id, headers);
+                                } catch (err) {
+                                    console.error(`[notionToMarkdown] Failed to fetch meeting ${label} (${sectionBlock.id}):`, err.message || err);
+                                }
+                                if (sectionChildren && sectionChildren.length > 0) {
+                                    md += await convert(sectionChildren, allBlocks, depth);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                }
+
+                md += `</div>\n\n`;
+                continue;
+            }
+
             // ── Column layout handling ───────────────────────────────────────────
             if (type === "column_list") {
                 if (!canFetch || !block.has_children) {
@@ -677,7 +741,7 @@ async function notionToMarkdown(blocks, config = {}) {
             md += line;
 
             // ── Recurse children ─────────────────────────────────────────────────
-            if (!["child_page", "table", "column_list", "column", "tab"].includes(type) && block.has_children) {
+            if (!["child_page", "table", "column_list", "column", "tab", "meeting_notes"].includes(type) && block.has_children) {
                 let children = Array.isArray(block.children) && block.children.length > 0
                     ? block.children
                     : null;

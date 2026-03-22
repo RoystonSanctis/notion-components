@@ -76,6 +76,7 @@ Converts a Notion API block array into a Markdown string.
 | column_list | HTML row (`<div class="notion-row">`) with nested columns |
 | column | HTML column (`<div class="notion-column">`) |
 | tab | Tabbed content (`<div class="notion-tabs">` / `<div class="notion-tab">`) |
+| meeting_notes | Meeting notes with Summary, Notes, Transcript sections |
 
 Unsupported blocks are stored separately for further processing.
 
