@@ -18,6 +18,7 @@
  * - Supports column_list + column layout using <div class="notion-row"> and <div class="notion-column">
  * - Supports tab blocks using <div class="notion-tabs"> and <div class="notion-tab"> with tab titles
  * - Supports meeting_notes blocks with Summary, Notes, and Transcript sections
+ * - Supports synced_block (original and reference) by rendering children transparently
  *
  * @param {Array}  blocks - Notion API blocks array
  * @param {Object} config - Optional configuration object
@@ -726,6 +727,13 @@ async function notionToMarkdown(blocks, config = {}) {
                     break;
 
                 case "synced_block":
+                    // synced_block is a transparent container — children are rendered via generic recursion below.
+                    // Works for both original (synced_from: null) and reference (synced_from.block_id) blocks.
+                    if (!canFetch) {
+                        unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
+                    }
+                    break;
+
                 case "template":
                 case "unsupported":
                     unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
