@@ -83,6 +83,20 @@ Converts a Notion API block array into a Markdown string.
 | template | Deprecated; renders like toggle with rich text + children |
 | transcription | Alias for `meeting_notes` (renamed in API v2026-03-11) |
 
+#### Inline Mentions
+
+Rich text mentions are rendered with context-aware formatting:
+
+| Mention Type | Markdown Output | Example |
+|-------------|----------------|---------|
+| Date (plain) | `@2026-03-22` | Date-only mention |
+| Date (with time / reminder) | `@2026-03-23T09:00:00.000+05:30 ⏰` | Reminder detected by time component |
+| Date range | `@start → end` | When end date is present |
+| User | `@Name (user_id: id)` | Includes user ID |
+| Page | `[📄 title](notion_url)` | Clickable link to the page |
+| Database | `[🗄️ title](notion_url)` | Clickable link to the database |
+| Link preview | `[🔗 text](url)` | Clickable preview link |
+
 Unsupported blocks are stored separately for further processing.
 
 ---

@@ -23,6 +23,7 @@
  * - Supports link_preview as clickable URL
  * - Supports template blocks (deprecated) by rendering rich_text + children
  * - Supports transcription as alias for meeting_notes
+ * - Renders inline mentions: @date (with ⏰ for reminders), @user (with user_id), 📄 page link, 🗄️ database link, 🔗 link_preview
  *
  * @param {Array}  blocks - Notion API blocks array
  * @param {Object} config - Optional configuration object
@@ -202,6 +203,56 @@ async function notionToMarkdown(blocks, config = {}) {
             // Inline equation
             if (item.type === "equation") {
                 return `$${text}$`;
+            }
+
+            // ── Mention handling ──────────────────────────────────────────────
+            if (item.type === "mention" && item.mention) {
+                const mention = item.mention;
+
+                switch (mention.type) {
+                    case "date": {
+                        const dateObj = mention.date || {};
+                        const start = dateObj.start || "";
+                        const end = dateObj.end || "";
+                        // Detect reminder (date with time component contains "T")
+                        const isReminder = start.includes("T");
+                        let dateStr = `@${start}`;
+                        if (end) dateStr += ` → ${end}`;
+                        if (isReminder) dateStr += " ⏰";
+                        return dateStr;
+                    }
+                    case "user": {
+                        const user = mention.user || {};
+                        const userName = user.name || text;
+                        const userId = user.id || "";
+                        return userId
+                            ? `@${userName} (user_id: ${userId})`
+                            : `@${userName}`;
+                    }
+                    case "page": {
+                        const pageId = mention.page?.id || "";
+                        const pageTitle = text || "Untitled";
+                        const pageHref = item.href || (pageId ? `https://www.notion.so/${pageId.replace(/-/g, "")}` : "");
+                        return pageHref
+                            ? `[📄 ${pageTitle}](${pageHref})`
+                            : `📄 ${pageTitle} (page_id: ${pageId})`;
+                    }
+                    case "database": {
+                        const dbId = mention.database?.id || "";
+                        const dbTitle = text || "Untitled database";
+                        const dbHref = item.href || (dbId ? `https://www.notion.so/${dbId.replace(/-/g, "")}` : "");
+                        return dbHref
+                            ? `[🗄️ ${dbTitle}](${dbHref})`
+                            : `🗄️ ${dbTitle} (database_id: ${dbId})`;
+                    }
+                    case "link_preview": {
+                        const previewUrl = mention.link_preview?.url || item.href || "";
+                        return previewUrl ? `[🔗 ${text}](${previewUrl})` : text;
+                    }
+                    default:
+                        // Fall through to default text handling for unknown mention types
+                        break;
+                }
             }
 
             const ann = item.annotations || {};
