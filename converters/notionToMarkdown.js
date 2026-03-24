@@ -24,12 +24,18 @@
  * - Supports template blocks (deprecated) by rendering rich_text + children
  * - Supports transcription as alias for meeting_notes
  * - Renders inline mentions: @date (with ⏰ for reminders), @user (with user_id), 📄 page link, 🗄️ database link, 🔗 link_preview, 🌐 link_mention (with title, description, thumbnail)
+ * - Accepts block ID string as input (fetches blocks from Notion API)
+ * - Configurable pagination: pageSize, startCursor, canPaginate, pageLimit
  *
- * @param {Array}  blocks - Notion API blocks array
+ * @param {Array|string}  blocks - Notion API blocks array OR a block ID string (requires auth)
  * @param {Object} config - Optional configuration object
- * @param {boolean}       config.parseChildPages   - Fetch and process child page blocks (default: false)
- * @param {boolean}       config.separateChildPage - Return child pages separately instead of inlined (default: false)
- * @param {string|boolean} config.auth             - Notion auth: string = API key, true = no auth header (backend proxy), false/undefined = no API calls
+ * @param {boolean}        config.parseChildPages   - Fetch and process child page blocks (default: false)
+ * @param {boolean}        config.separateChildPage - Return child pages separately instead of inlined (default: false)
+ * @param {string|boolean} config.auth              - Notion auth: string = API key, true = no auth header (backend proxy), false/undefined = no API calls
+ * @param {number}         config.pageSize          - API page size for top-level fetch (default: 100, max: 100)
+ * @param {string}         config.startCursor       - Cursor to resume pagination from
+ * @param {boolean}        config.canPaginate       - true = fetch only 1 page (returns next_cursor/has_more); false = fetch all (default: false)
+ * @param {number}         config.pageLimit         - Max pages to fetch when canPaginate is false (optional)
  */
 
 const NOTION_VERSION = "2026-03-11";
@@ -77,6 +83,47 @@ async function fetchBlockChildren(blockId, headers) {
     }
 
     return allChildren;
+}
+
+// ── Fetch top-level blocks with configurable pagination ──────────────────────
+async function fetchTopLevelBlocks(blockId, headers, opts = {}) {
+    const { pageSize = 100, startCursor, canPaginate = false, pageLimit } = opts;
+    const allResults = [];
+    let cursor = startCursor || undefined;
+    let hasMore = true;
+    let pagesFetched = 0;
+
+    while (hasMore) {
+        const params = { page_size: pageSize };
+        if (cursor) params.start_cursor = cursor;
+
+        const response = await _rateLimitedRequest({
+            method: "GET",
+            url: `https://api.notion.com/v1/blocks/${blockId}/children`,
+            headers: headers,
+            params: params
+        });
+
+        const data = response.data;
+        if (Array.isArray(data.results)) {
+            allResults.push(...data.results);
+        }
+
+        hasMore = data.has_more === true;
+        cursor = data.next_cursor || undefined;
+        pagesFetched++;
+
+        // canPaginate: true → stop after 1 page
+        if (canPaginate) break;
+        // pageLimit → stop after N pages (only when canPaginate is false)
+        if (pageLimit && pagesFetched >= pageLimit) break;
+    }
+
+    return {
+        results: allResults,
+        next_cursor: cursor || null,
+        has_more: hasMore
+    };
 }
 
 // ── Fetch parent page/database/data_source recursively to build breadcrumb ───────────────
@@ -173,23 +220,50 @@ function _buildHeaders(auth) {
 
 // ── Main converter ───────────────────────────────────────────────────────────
 async function notionToMarkdown(blocks, config = {}) {
-    if (!Array.isArray(blocks)) {
-        return {
-            markdownContent: "",
-            unsupportedMarkdownBlocks: [{ error: "Input is not an array of blocks" }]
-        };
-    }
-
     const {
         parseChildPages = false,
         separateChildPage = false,
-        auth = undefined
+        auth = undefined,
+        pageSize = 100,
+        startCursor = undefined,
+        canPaginate = false,
+        pageLimit = undefined
     } = config;
 
     const unsupportedMarkdownBlocks = [];
     const childPages = [];
     const canFetch = auth === true || typeof auth === "string";
     const headers = canFetch ? _buildHeaders(auth) : null;
+    let paginationMeta = null;
+
+    // ── Handle block ID string input ─────────────────────────────────────────
+    if (typeof blocks === "string") {
+        if (!canFetch) {
+            return {
+                markdownContent: "",
+                unsupportedMarkdownBlocks: [{ error: "auth is required when blocks is a block ID" }]
+            };
+        }
+        try {
+            const fetched = await fetchTopLevelBlocks(blocks, headers, {
+                pageSize, startCursor, canPaginate, pageLimit
+            });
+            blocks = fetched.results;
+            paginationMeta = { next_cursor: fetched.next_cursor, has_more: fetched.has_more };
+        } catch (err) {
+            return {
+                markdownContent: "",
+                unsupportedMarkdownBlocks: [{ error: `Failed to fetch blocks: ${err.message || err}` }]
+            };
+        }
+    }
+
+    if (!Array.isArray(blocks)) {
+        return {
+            markdownContent: "",
+            unsupportedMarkdownBlocks: [{ error: "Input is not an array of blocks or block ID" }]
+        };
+    }
 
     // ── Parse rich_text (official Notion API format) ───────────────────────────
     function parseRichText(richTextArray = []) {
@@ -882,6 +956,11 @@ async function notionToMarkdown(blocks, config = {}) {
 
     if (separateChildPage) {
         result.childPages = childPages;
+    }
+
+    if (canPaginate && paginationMeta) {
+        result.next_cursor = paginationMeta.next_cursor;
+        result.has_more = paginationMeta.has_more;
     }
 
     return result;

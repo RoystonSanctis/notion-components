@@ -129,6 +129,34 @@ const result = await notionToMarkdown(notionBlocks, {
 })
 // result.childPages → [{ pageId, title, markdownContent }]
 
+// Using a block ID instead of blocks array (fetches from API)
+const result = await notionToMarkdown("block-id-string", {
+  auth: "ntn_your_api_key"
+})
+
+// With pagination — fetch only 1 page
+const page1 = await notionToMarkdown("block-id-string", {
+  auth: "ntn_your_api_key",
+  canPaginate: true,
+  pageSize: 50
+})
+console.log(page1.next_cursor) // cursor for next page
+console.log(page1.has_more)    // true if more pages exist
+
+// Fetch next page using cursor
+const page2 = await notionToMarkdown("block-id-string", {
+  auth: "ntn_your_api_key",
+  canPaginate: true,
+  pageSize: 50,
+  startCursor: page1.next_cursor
+})
+
+// Limit total pages fetched (fetch all but cap at 3 pages)
+const result = await notionToMarkdown("block-id-string", {
+  auth: "ntn_your_api_key",
+  pageLimit: 3
+})
+
 console.log(result.markdownContent)
 console.log(result.unsupportedMarkdownBlocks)
 ```
@@ -139,7 +167,9 @@ console.log(result.unsupportedMarkdownBlocks)
 {
   markdownContent: "Converted markdown text",
   unsupportedMarkdownBlocks: [],
-  childPages: []  // only included when separateChildPage is true
+  childPages: [],    // only when separateChildPage is true
+  next_cursor: null,  // only when blocks is a string (block ID)
+  has_more: false     // only when blocks is a string (block ID)
 }
 ```
 
@@ -151,8 +181,8 @@ Converts a Notion block array into Markdown. The function is **async** since it 
 
 #### Parameters
 
-- **blocks**: `Array`
-  The array of blocks returned from the Notion API.
+- **blocks**: `Array | string`
+  An array of blocks from the Notion API, or a **block ID string** (requires `auth`). When a string is provided, blocks are fetched from the API.
 - **config**: `Object` *(optional)*
   Configuration object. Defaults to `{}`.
 
@@ -160,7 +190,11 @@ Converts a Notion block array into Markdown. The function is **async** since it 
 |--------|------|---------|-------------|
 | `auth` | `string \| boolean` | `undefined` | API key string → sent as `Bearer` token. `true` → API calls without auth header (backend proxy). `false` / `undefined` → no API calls. |
 | `parseChildPages` | `boolean` | `false` | When `true` and `auth` is provided, fetches and processes child page content. |
-| `separateChildPage` | `boolean` | `false` | When `true`, child pages are returned in a separate `childPages` array instead of being inlined. Only used when `parseChildPages` is `true`. |
+| `separateChildPage` | `boolean` | `false` | When `true`, child pages are returned in a separate `childPages` array instead of being inlined. |
+| `pageSize` | `number` | `100` | API page size for the top-level fetch (max 100). Only used when `blocks` is a string. |
+| `startCursor` | `string` | `undefined` | Cursor to resume pagination from a previous response's `next_cursor`. |
+| `canPaginate` | `boolean` | `false` | `true` = fetch only 1 page (returns `next_cursor`/`has_more`). `false` = fetch all pages. |
+| `pageLimit` | `number` | `undefined` | Max pages to fetch when `canPaginate` is `false`. Ignored when `canPaginate` is `true`. |
 
 #### Returns
 
@@ -168,7 +202,9 @@ Converts a Notion block array into Markdown. The function is **async** since it 
 {
   markdownContent: string,
   unsupportedMarkdownBlocks: array,
-  childPages: array  // only when separateChildPage is true
+  childPages: array,   // only when separateChildPage is true
+  next_cursor: string, // only when blocks is a string (block ID)
+  has_more: boolean    // only when blocks is a string (block ID)
 }
 ```
 
