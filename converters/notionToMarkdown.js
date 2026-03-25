@@ -36,6 +36,7 @@
  * @param {string}         config.startCursor       - Cursor to resume pagination from
  * @param {boolean}        config.canPaginate       - true = fetch only 1 page (returns next_cursor/has_more); false = fetch all (default: false)
  * @param {number}         config.pageLimit         - Max pages to fetch when canPaginate is false (optional)
+ * @param {string[]}       config.outputResponse    - Output format array: ["markdown"], ["blocks"], or both (default: ["markdown"])
  */
 
 const NOTION_VERSION = "2026-03-11";
@@ -89,12 +90,15 @@ async function fetchBlockChildren(blockId, headers) {
 async function fetchTopLevelBlocks(blockId, headers, opts = {}) {
     const { pageSize = 100, startCursor, canPaginate = false, pageLimit } = opts;
     const allResults = [];
-    let cursor = startCursor || undefined;
+    
+    const actualPageSize = canPaginate ? pageSize : 100;
+    let cursor = canPaginate ? startCursor : undefined;
+    
     let hasMore = true;
     let pagesFetched = 0;
 
     while (hasMore) {
-        const params = { page_size: pageSize };
+        const params = { page_size: actualPageSize };
         if (cursor) params.start_cursor = cursor;
 
         const response = await _rateLimitedRequest({
@@ -227,7 +231,8 @@ async function notionToMarkdown(blocks, config = {}) {
         pageSize = 100,
         startCursor = undefined,
         canPaginate = false,
-        pageLimit = undefined
+        pageLimit = undefined,
+        outputResponse = ["markdown"]
     } = config;
 
     const unsupportedMarkdownBlocks = [];
@@ -462,6 +467,7 @@ async function notionToMarkdown(blocks, config = {}) {
                 let tabs = null;
                 try {
                     tabs = await fetchBlockChildren(block.id, headers);
+                    block.children = tabs;
                 } catch (err) {
                     console.error(`[notionToMarkdown] Failed to fetch tab children (${block.id}):`, err.message || err);
                     unsupportedMarkdownBlocks.push(JSON.parse(JSON.stringify(block)));
@@ -482,6 +488,7 @@ async function notionToMarkdown(blocks, config = {}) {
                     if (tab.has_children) {
                         try {
                             tabChildren = await fetchBlockChildren(tab.id, headers);
+                            tab.children = tabChildren;
                         } catch (err) {
                             console.error(`[notionToMarkdown] Failed to fetch tab content (${tab.id}):`, err.message || err);
                             tabChildren = [];
@@ -533,6 +540,7 @@ async function notionToMarkdown(blocks, config = {}) {
                     let allChildren = null;
                     try {
                         allChildren = await fetchBlockChildren(block.id, headers);
+                        block.children = allChildren;
                     } catch (err) {
                         console.error(`[notionToMarkdown] Failed to fetch meeting_notes children (${block.id}):`, err.message || err);
                     }
@@ -550,6 +558,7 @@ async function notionToMarkdown(blocks, config = {}) {
                                 let sectionChildren = null;
                                 try {
                                     sectionChildren = await fetchBlockChildren(sectionBlock.id, headers);
+                                    sectionBlock.children = sectionChildren;
                                 } catch (err) {
                                     console.error(`[notionToMarkdown] Failed to fetch meeting ${label} (${sectionBlock.id}):`, err.message || err);
                                 }
@@ -581,6 +590,7 @@ async function notionToMarkdown(blocks, config = {}) {
                 try {
                     if (!columns) {
                         columns = await fetchBlockChildren(block.id, headers);
+                        block.children = columns;
                     }
                 } catch (err) {
                     console.error(`[notionToMarkdown] Failed to fetch column_list children (${block.id}):`, err.message || err);
@@ -605,6 +615,7 @@ async function notionToMarkdown(blocks, config = {}) {
                     if (!colChildren && col.has_children) {
                         try {
                             colChildren = await fetchBlockChildren(col.id, headers);
+                            col.children = colChildren;
                         } catch (err) {
                             console.error(`[notionToMarkdown] Failed to fetch column children (${col.id}):`, err.message || err);
                             colChildren = [];
@@ -766,13 +777,20 @@ async function notionToMarkdown(blocks, config = {}) {
                     if (parseChildPages && canFetch) {
                         try {
                             const pageChildren = await fetchBlockChildren(childId, headers);
+                            block.children = pageChildren;
                             if (separateChildPage) {
                                 const childResult = await convert(pageChildren, pageChildren, 0);
-                                childPages.push({
+                                const childPageObj = {
                                     pageId: childId,
                                     title: childTitle,
-                                    markdownContent: childResult.trim()
-                                });
+                                };
+                                if (outputResponse.includes("markdown")) {
+                                    childPageObj.markdownContent = childResult.trim();
+                                }
+                                if (outputResponse.includes("blocks")) {
+                                    childPageObj.blocks = pageChildren;
+                                }
+                                childPages.push(childPageObj);
                                 line = `${indent}[Child page: ${childTitle}] (page_id: ${childId})\n\n`;
                             } else {
                                 line = `${indent}## ${childTitle}\n\n`;
@@ -816,6 +834,7 @@ async function notionToMarkdown(blocks, config = {}) {
                     if (!rows && parseChildPages && canFetch && block.has_children) {
                         try {
                             rows = await fetchBlockChildren(block.id, headers);
+                            block.children = rows;
                         } catch (err) {
                             console.error(`Failed to fetch table rows (${block.id}):`, err);
                         }
@@ -928,6 +947,7 @@ async function notionToMarkdown(blocks, config = {}) {
                 if (!children && canFetch) {
                     try {
                         children = await fetchBlockChildren(block.id, headers);
+                        block.children = children;
                     } catch (err) {
                         // silent fail
                     }
@@ -949,13 +969,19 @@ async function notionToMarkdown(blocks, config = {}) {
 
     const markdown = (await convert(blocks, blocks)).trim();
 
-    const result = {
-        markdownContent: markdown,
-        unsupportedMarkdownBlocks: unsupportedMarkdownBlocks.length ? unsupportedMarkdownBlocks : []
-    };
+    const result = {};
+
+    if (outputResponse.includes("markdown")) {
+        result.markdownContent = markdown;
+        result.unsupportedMarkdownBlocks = unsupportedMarkdownBlocks.length ? unsupportedMarkdownBlocks : [];
+    }
 
     if (separateChildPage) {
         result.childPages = childPages;
+    }
+
+    if (outputResponse.includes("blocks")) {
+        result.blocks = blocks;
     }
 
     if (canPaginate && paginationMeta) {
